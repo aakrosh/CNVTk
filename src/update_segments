@@ -1,0 +1,78 @@
+#!/usr/bin/env python
+
+"""
+    usage:
+      update_segments [options] smoothcounts.txt segments.txt > segments.updated.txt
+
+    where the options are:
+        -h,--help : print usage and quit
+        -d,--debug: print debug information
+"""
+
+from sys import argv, stderr, stdin, exit, stdout
+from getopt import getopt, GetoptError
+
+import pysam as ps
+
+__author__ = "Aakrosh Ratan"
+__email__  = "ratan@virginia.edu"
+
+# do we want the debug information to be printed?
+debug_flag = False
+
+def main(cntname, segname):
+    # read all the bin start and end points from the normalized counts
+    cnts = {}
+    with open(cntname, "r") as f:
+        for line in f:
+            chrom,start,end,_,_,_ = line.strip().split()
+            start = int(start)
+            end   = int(end)
+            if chrom not in cnts:
+                cnts[chrom] = []
+            cnts[chrom].append((start,end))
+
+    header = True
+    chroms = set()
+    with open(segname, "r") as f:
+        for line in f:
+            if line.startswith("ID"): 
+                header = False
+                continue
+            if header == True:
+                continue        
+
+            _,chrom,start,end,num,mean,sd,median,mad = line.strip().split()
+            if chrom not in chroms:
+                chromindx = 0
+                chroms.add(chrom)              
+
+            intervals = cnts[chrom][chromindx:chromindx+int(num)]
+            mstart = intervals[0][0]
+            mend   = intervals[-1][1]
+            chromindx += int(num)
+
+            print "\t".join([chrom,str(mstart),str(mend),mean,sd])
+
+if __name__ == "__main__":
+    try:
+        opts, args = getopt(argv[1:], "hd",["help", "debug"])
+    except GetoptError, err:
+        print str(err)
+        print >> stderr, __doc__
+        exit(2) 
+
+    for o, a in opts:
+        if o in ("-h", "--help"):
+            print >> stderr, __doc__
+            exit()
+        elif o in ("-d", "--debug"):
+            debug_flag = True
+        else:
+            assert False, "unhandled option"
+
+    if len(args) != 2:
+        print >> stderr, __doc__
+        exit(3)
+
+    main(args[0], args[1])

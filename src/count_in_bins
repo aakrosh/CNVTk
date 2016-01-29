@@ -1,0 +1,309 @@
+#!/usr/bin/env python
+
+"""
+    usage:
+        count_in_bins [options] reference.fa reference.mappability alignments.bam
+
+    where the options are:
+        -h,--help      : print usage and quit
+        -d,--debug     : print debug information
+        -b,--binsize   : the number of bases in a single bin [auto]
+
+    Create a file where we report the following:
+    a) chromosome
+    b) interval start
+    c) interval end
+    d) number of sequences that start in the bin
+    e) number of bases in bin that are in [ACGT]
+    f) GC content of the bin
+
+    for non-overlapping windows of size specified by -b mappable bases. If 
+    -b is not specified we select the size automatically by requiring that 
+    at least 100 fragments on an average cover a bin composed of mappable bases. 
+    The mappable segments are constructed from the mappability file, should be
+    produced using gem-mappability
+    (http://algorithms.cnag.cat/wiki/The_GEM_library#Documentation). The
+    manuscript that discusses the mappability is here:
+    http://journals.plos.org/plosone/article?id=10.1371/journal.pone.0030377. 
+"""
+
+from sys import argv, stderr, stdin, exit, stdout
+from getopt import getopt, GetoptError
+from time import time
+from re import match
+from math import ceil
+
+import numpy as np
+import pysam as ps
+
+__author__ = "Aakrosh Ratan"
+__email__  = "ratan@virginia.edu"
+
+# do we want the debug information to be printed?
+debug_flag = False
+
+class Block:
+    pass
+
+def CreateRefMap(refname, mapname):
+    """Return an object that lists the unique regions of the reference.
+ 
+    The format of the input file includes description of the encoding used,
+    followed by fasta like format.   
+
+    ~~ENCODING
+    ' '~[0-0]
+    '!'~[1-1]
+    '"'~[2-2]
+     ...
+    '&'~[6-7]
+     ...
+    ~chr17
+    !!!!!!!!!!!!!!!!!!!!!!!!!""!!!!!!!!!!%%*&&00,00/66/140.-,,
+    ,/04:41237?CDDDD??>;7*$$!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !!!!!%$$#!!"#$&%"#.7>:><9898899999:.3---1111"!!!!##!!
+    ...
+    """
+ 
+    refmap = {}
+    reffile = ps.FastaFile(refname)
+    for chrom,chromlength in zip(reffile.references,reffile.lengths):
+        refmap[chrom] = np.array(['0'] * int(chromlength))
+    reffile.close()
+
+    uniquesym = None
+    with open(mapname, "r") as f:
+        line = f.readline()
+        assert line.startswith("~~")
+        while not line.startswith("~~ENCODING"):
+            line = f.readline()
+        line = f.readline()
+        while not line.startswith("~"):
+            m = match(r"'(.)'\~\[(\d+)-(\d+)\]", line.strip())
+            if m.group(2) == "1" and m.group(3) == "1":
+                uniquesym = m.group(1)
+            line = f.readline()
+
+        while line:
+            if line.startswith("~"):
+                chrom = line.strip().split()[0][1:]
+                chromarray = refmap[chrom]
+                chromindx = 0
+            else:
+                for q in line:
+                    if q == "\n": continue
+                    if q == uniquesym:
+                        chromarray[chromindx] = '1'
+                    chromindx += 1
+                
+            line = f.readline()
+
+    if debug_flag:
+        nummappable = 0
+        numtotal = 0
+        for chrom,vals in refmap.items():
+            for v in vals:
+                numtotal += 1
+                if v == '1': nummappable += 1   
+        frac = nummappable * 100.0 / numtotal
+        print >> stderr, "Number of mappable bases: %d (%2.2f%%)"% (nummappable,frac)
+
+    return refmap
+
+def CreateCoverageMap(refname,bamname):
+    '''Read the BAM file & return the number of fragments coverage each location.
+    '''
+    covmap = {}
+    reffile = ps.FastaFile(refname)
+    for chrom,chromlength in zip(reffile.references,reffile.lengths):
+        covmap[chrom] = np.array([0] * int(chromlength))
+    reffile.close()
+
+    bamfile = ps.Samfile(bamname, "rb")
+
+    numread = 0
+    for alignment in bamfile.fetch():
+        numread += 1
+        if numread % 10000000 == 0:
+            print >> stderr, "Processed %d reads" % numread
+
+        if alignment.is_duplicate or \
+           alignment.is_qcfail    or \
+           alignment.is_secondary or \
+           alignment.is_unmapped: continue
+        
+        if (alignment.is_paired and alignment.is_read1) or \
+           (alignment.is_paired == False):
+            chrom = bamfile.getrname(alignment.reference_id)
+            covmap[chrom][alignment.pos-1] += 1
+    bamfile.close() 
+    
+    if debug_flag:
+        numcovered = 0
+        for k,vs in covmap.items():
+            for v in vs:
+                if v > 0:
+                    numcovered += 1
+        print >> stderr, "Number of bases covered: %d" % numcovered
+
+    return covmap
+
+def PartitionCovIntoBins(refname, refmap, covmap, binsize):
+    bins = {}
+    reffile = ps.FastaFile(refname)
+   
+    for chrom,chromlength in zip(reffile.references,reffile.lengths):
+        bins[chrom] = [0] * int(ceil(chromlength/binsize))
+        chrommap = refmap[chrom]
+        chromcov = covmap[chrom]
+
+        numuniq = 0
+        numcov  = 0
+        start   = 0
+        end     = start
+
+        for i,(x,y) in enumerate(zip(chrommap,chromcov)):
+            if x == '1': 
+                end = i
+                numuniq += 1
+                numcov += y
+
+            if numuniq == binsize:
+                bins[chrom][start/binsize] = numcov
+                
+                start   = end + 1
+                end     = start
+                numuniq = 0
+                numcov  = 0
+        
+        bins[chrom][start/binsize] = numcov
+        
+        # for this particular chromosome, only these members are needed. so lets
+        # throw away the rest
+        bins[chrom] = bins[chrom][:start/binsize]
+     
+    reffile.close()        
+    return bins    
+
+def CalculateAverageCoverage(coverages):
+    '''Calculate the average coverage from the given coverage map.
+    '''
+    nonzero_covs = []
+
+    for chrom,chromcovs in coverages.items():
+        chromnonz = [x for x in chromcovs if x != 0]
+        nonzero_covs.extend(chromnonz)
+
+    return np.mean(nonzero_covs)
+
+def CalculateAGoodBinSize(refname, refmap, covmap):
+    '''Calculate a good bin size to use for CNV calls. 
+    '''
+    binsize = 100
+
+    # start with a binsize of 100 and see how many fragments on an average cover
+    # each bin
+    coverages = PartitionCovIntoBins(refname, refmap, covmap, binsize)
+    average_cov = CalculateAverageCoverage(coverages)
+    
+    if average_cov >= 100:
+        binsize = 100
+    else:
+        binsize = int(100 * (100 / average_cov))
+
+    return binsize
+
+def PrintBinInfo(refname, refmap, covmap, binsize):
+    reffile = ps.FastaFile(refname)
+   
+    for chrom,chromlength in zip(reffile.references,reffile.lengths):
+        bincov   = [0] * int(ceil(chromlength/binsize))
+        chrommap = refmap[chrom]
+        chromcov = covmap[chrom]
+        chromseq = reffile.fetch(chrom)
+
+        numuniq = 0
+        numcov  = 0
+        start   = 0
+        end     = start
+        a = c = g = t = 0
+
+        for i,(x,y) in enumerate(zip(chrommap,chromcov)):
+            if x == '1': 
+                end = i
+                numuniq += 1
+                numcov += y
+                if chromseq[i] in ['A','a']:
+                    a += 1
+                elif chromseq[i] in ['C','c']:
+                    c += 1
+                elif chromseq[i] in ['G','g']:
+                    g += 1
+                elif chromseq[i] in ['T','t']:
+                    t += 1
+
+            if numuniq == binsize:
+                knucs = a + c + g + t
+                gc  = int((c+g) * 100.0 / knucs)
+                print "\t".join([chrom,str(start),str(end),str(numcov),str(knucs),str(gc)])
+                
+                start   = end + 1
+                end     = start
+                numuniq = 0
+                numcov  = 0
+                a = c = g = t = 0
+                
+        knucs = a + c + g + t
+        gc  = int((c+g) * 100.0 / knucs)
+        print "\t".join([chrom,str(start),str(end),str(numcov),str(knucs),str(gc)])
+     
+    reffile.close()        
+
+def main(refname, mapname, bamname, binsize):
+    st = time() # start time
+
+    # create a map of bases that are  uniquely mappable
+    refmap = CreateRefMap(refname, mapname)
+    print >> stderr, "[%d s.] Created a map of unique locations in the genome" % (time() - st)
+
+    # create a coverage map of all locations from the BAM file
+    covmap = CreateCoverageMap(refname, bamname)
+    print >> stderr, "[%d s.] Read the coverage information from the BAM file" % (time() - st)
+
+    # calculate a bin size that will ensure that at least 100 fragments cover a
+    # bin on average
+    if binsize == None:
+        binsize = CalculateAGoodBinSize(refname, refmap, covmap)
+    print >> stderr, "[%d s.] Using a bin size of %d mappable bases" % (time() -
+st, binsize)
+
+    # using that bin size, print out the information about the bins
+    PrintBinInfo(refname, refmap, covmap, binsize)
+    print >> stderr, "[%d s.] Done with the counting" % (time() - st)
+
+if __name__ == "__main__":
+    try:
+        opts, args = getopt(argv[1:], "hdb:",["help", "debug", "binsize="])
+    except GetoptError, err:
+        print str(err)
+        print >> stderr, __doc__
+        exit(2) 
+
+    binsize = None
+
+    for o, a in opts:
+        if o in ("-h", "--help"):
+            print >> stderr, __doc__
+            exit()
+        elif o in ("-d", "--debug"):
+            debug_flag = True
+        elif o in ("-b", "--binsize"):
+            binsize = int(a)
+        else:
+            assert False, "unhandled option"
+
+    if len(args) != 3:
+        print >> stderr, __doc__
+        exit(3)
+
+    main(args[0], args[1], args[2], binsize)

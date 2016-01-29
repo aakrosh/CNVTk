@@ -1,0 +1,115 @@
+#!/usr/bin/env Rscript
+
+## Default when nothing is passed
+args = commandArgs(trailingOnly = TRUE)
+if(length(args) == 1){
+    args <- c("--help")
+}
+
+## Help section
+if("--help" %in% args) {
+  cat("
+      Plot the raw coverage and the GC correction
+ 
+      Arguments:
+      --human             - is the data human [False]
+      --sparse            - is the data too sparse e.g. single-cell [False]
+      --normalized        - show normalized count instead of raw counts [False] 
+      --help              - print this text
+
+      Example:
+      ./plot_correction --human rawdata.txt smoothedcounts.txt correction.png \n\n")
+     
+  q(save="no")
+}    
+
+rawdata  = args[length(args)-2]
+smoothed = args[length(args)-1]
+output   = args[length(args)]
+
+library(ggplot2)
+library(grid)
+library(gridExtra)
+
+# read the columns from the raw coverage
+if ("--smooth" %in% args) {
+    data = read.table(pipe(paste("cut -f 1,2,4", smoothed, sep = "\t")))
+} else {
+    data = read.table(pipe(paste("cut -f 1,2,4", rawdata, sep = "\t")))
+}
+names(data) = c("chrom", "start", "coverage")
+
+if("--human" %in% args) {
+    if("--sparse" %in% args) {
+        frac = 0.5
+        png(output, height = 8, width = 32, units = "in", res = 200)
+    } else {
+        frac = 1.0 / 25
+        png(output, height = 100, width = 32, units = "in", res = 200)
+    }
+    chroms = seq(1,22)
+    chroms = append(chroms, "X")
+    chroms = append(chroms, "Y")
+    data = subset(data, subset = data$chrom %in% chroms, drop = T)
+} else {
+    if("--sparse" %in% args) {
+        frac = 0.5
+        png(output, height = 8, width = 32, units = "in", res = 200)
+    } else {
+        frac = 1.0 / (length(unique(data$chrom))+1)
+        png(output, height = (length(unique(data$chrom))+1) * 4, width = 32, units = "in", res = 200)
+    }
+}
+
+# lets fix the order of the chromosomes
+data$chrom <- factor(data$chrom, levels=unique(data$chrom))
+
+# range of my plot
+covmax = quantile(data$coverage, probs = 0.99, na.rm = TRUE, names = FALSE)
+
+# this is the plot of the counts,
+colors = c("#0072B2")
+p1 = ggplot() +
+     theme_bw() +
+     theme(legend.position="none") +
+     theme(text = element_text(size=24)) + 
+     ylim(0, 2*covmax) +
+     xlab("Coordinate") +
+     ylab("Coverage")
+
+if("--sparse" %in% args) {
+    p1 = p1 + facet_wrap( ~ chrom, nrow = 1, scales = "free_x") 
+    p1 = p1 + theme(axis.text.x=element_blank())
+    p1 = p1 + geom_point(data = data, aes(start, coverage, colour = colors[1]), size = 1, alpha = 0.1) 
+} else {
+    p1 = p1 + facet_wrap( ~ chrom, nrow = length(unique(data$chrom))) 
+    p1 = p1 + geom_point(data = data, aes(start, coverage, colour = colors[1]), size = 3, alpha = 0.1)
+}
+
+# lets plot the coverage-GC heatmap
+data = read.table(pipe(paste("cut -f 4,6", rawdata, sep = "\t")))
+covmax = quantile(data$V1, probs = 0.99, na.rm = TRUE, names = FALSE)
+df = data.frame(x = data$V1, y = data$V2)
+p2 = ggplot(df, aes(y, x)) +
+     theme_bw() + theme(legend.position="none") + 
+     theme(text = element_text(size=24)) + 
+     stat_density2d(aes(alpha=..level..), geom="polygon") +
+     scale_alpha_continuous(limits=c(0,0.2),breaks=seq(0,0.2,by=0.025)) +
+     ylim(0, covmax) +
+     labs(x = "GC Content", y = "Coverage", main = "Before correction")
+
+data = read.table(pipe(paste("cut -f 4,6", smoothed, sep = "\t")))
+covmax = quantile(data$V1, probs = 0.99, na.rm = TRUE, names = FALSE)
+df = data.frame(x = data$V1, y = data$V2)
+p3 = ggplot(df, aes(y, x)) +
+     theme_bw() + theme(legend.position="none") + 
+     theme(text = element_text(size=24)) + 
+     stat_density2d(aes(alpha=..level..), geom="polygon") +
+     scale_alpha_continuous(limits=c(0,0.2),breaks=seq(0,0.2,by=0.025)) +
+     ylim(0, covmax) +
+     labs(x = "GC Content", y = "Coverage", main = "After correction")
+
+grid.arrange(p1, p2, p3, nrow = 2, heights = c(1-frac, frac),layout_matrix = cbind(c(1,2), c(1,3)))
+
+# the end.
+dev.off()

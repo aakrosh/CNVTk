@@ -1,0 +1,79 @@
+#!/usr/bin/env Rscript
+
+library(ggplot2)
+library(grid)
+library(gridExtra)
+
+## Default when nothing is passed
+args = commandArgs(trailingOnly = TRUE)
+if(length(args) == 1){
+    args <- c("--help")
+}
+
+## Help section
+if("--help" %in% args) {
+  cat("
+      Plot the GC vs normalized coverage as a view of ploidy.
+ 
+      Arguments:
+      --help              - print this text
+      --merge=someValue   - merge so many bins into one [100]
+
+      Example:
+      ./plot_gc_cn smoothed.txt gc.png \n\n")
+     
+  q(save="no")
+}    
+
+## Parse arguments (we expect the form --arg=value)
+parseArgs <- function(x) strsplit(sub("^--", "", x), "=")
+argsDF <- as.data.frame(do.call("rbind", parseArgs(args)))
+argsL <- as.list(as.character(argsDF$V2))
+names(argsL) <- argsDF$V1
+ 
+## Arg1 default
+if(is.null(argsL$merge)) {
+    argsL$merge = 100
+}
+argsL$merge = as.integer(argsL$merge)
+
+smoothed = args[length(args)-1]
+output   = args[length(args)]
+
+# read the columns from the coverage
+data = read.table(pipe(paste("cut -f 1,4,5", smoothed, sep = "\t")))
+names(data) = c("chrom", "coverage", "gc")
+
+slice<-function(x,n) {
+    N<-length(x);
+    lapply(seq(1,N,n),function(i) x[i:min(i+n-1,N)])
+}
+
+coverage = data$coverage
+gc = data$gc
+
+cov = c()
+for (s in slice(coverage, argsL$merge)) {
+    cov = c(cov, sum(s))
+}
+
+gcs = c()
+for (s in slice(gc, argsL$merge)) {
+    gcs = c(gcs, mean(s))
+}
+df = data.frame(cbind(cov,gcs))
+names(df) = c("coverage", "gc")
+
+png(output, height = 8, width = 8, units = "in", res = 200)
+
+covmax = quantile(df$coverage, probs = 0.95, na.rm = TRUE, names = FALSE)
+p = ggplot(df, aes(gc, coverage)) + 
+    theme_bw() + theme(legend.position="none") +
+    geom_point(size = I(3), alpha = I(0.2)) + 
+    ylim(0, 1.5*covmax) + 
+    xlab("GC Content") + 
+    ylab("Coverage")
+print(p)
+
+# the end.
+dev.off()

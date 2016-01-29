@@ -1,0 +1,84 @@
+#!/usr/bin/env Rscript
+
+args = commandArgs(trailingOnly = TRUE)
+if(length(args) == 1){
+    args <- c("--help")
+}
+
+## Help section
+if("--help" %in% args) {
+  cat("
+      Plot the corrected coverage and the CBS segments given a median coverage
+ 
+      Arguments:
+      --human            - is the data human 
+      --sparse           - is the data too sparse e.g. single-cell
+      --help              - print this text
+
+      Example:
+      ./plot_segments --human 25 smoothed.txt segments.txt segment.png \n\n")
+     
+  q(save="no")
+}    
+
+mediancov = as.integer(args[length(args)-3])
+counts = args[length(args)-2]
+segments = args[length(args)-1]
+output = args[length(args)]
+
+library(ggplot2)
+library(grid)
+library(gridExtra)
+
+data = read.table(pipe(paste("cut -f 1,2,4", counts, sep = "\t")))
+names(data) = c("chrom", "start", "coverage")
+data$coverage = log2(data$coverage / mediancov)
+
+segdata = read.table(pipe(paste("cut -f 1,2,3,4,7", segments, sep = "\t")))
+names(segdata) = c("chrom", "start", "end", "coverage", "CN")
+
+if("--human" %in% args) {
+    if("--sparse" %in% args) {
+        png(output, height = 4, width = 32, units = "in", res = 200)
+    } else {
+        png(output, height = 96, width = 32, units = "in", res = 200)
+    }
+    chroms = seq(1,22)
+    chroms = append(chroms, "X")
+    chroms = append(chroms, "Y")
+    data = subset(data, subset = data$chrom %in% chroms, drop = T)
+    segdata = subset(segdata, subset = segdata$chrom %in% chroms, drop = T)
+} else {
+    if("--sparse" %in% args) {
+        png(output, height = 4, width = 32, units = "in", res = 200)
+    } else {
+        png(output, height = length(unique(data$chrom)) * 4, width = 32, units =
+"in", res = 200)
+    }
+}
+
+# lets fix the order of the chromosomes
+data$chrom <- factor(data$chrom, levels=unique(data$chrom))
+segdata$chrom <- factor(segdata$chrom, levels=unique(segdata$chrom))
+
+p = ggplot(data = data, aes(x = start, y = coverage)) +
+    geom_point(colour = "#FEE6CE", size = 2, alpha = 0.5) + 
+    geom_segment(data=segdata,
+    aes(x=start,xend=end,y=coverage,yend=coverage,colour=factor(CN)),size=2) +
+    geom_hline(aes(yintercept = 0), linetype = "dashed") +
+    theme_bw() + theme(legend.position="right") +
+    scale_color_brewer(name = "Copy Numbers", type = "div", palette = "Set1") + 
+    xlab("Coordinate") +
+    ylab("Coverage") + 
+    ylim(-3,3)
+
+if("--sparse" %in% args) {
+    p = p + facet_wrap( ~ chrom, nrow = 1, scales = "free_x") 
+    p = p + theme(axis.text.x=element_blank())
+} else {
+    p = p + facet_wrap( ~ chrom, nrow = length(unique(data$chrom)))
+}
+
+print(p)
+
+dev.off()

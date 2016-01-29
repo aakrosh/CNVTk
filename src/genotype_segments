@@ -1,0 +1,116 @@
+#!/usr/bin/env python
+
+"""
+    usage:
+      genotype_segments [options] segments.txt
+
+    where the options are:
+        -h,--help : print usage and quit
+        -d,--debug: print debug information
+        -m,--numcomponents: number of copy number states to consider [5]
+"""
+
+from sys import argv, stderr, stdin, exit, stdout
+from getopt import getopt, GetoptError
+
+import numpy as np 
+import sklearn.mixture
+import sklearn.metrics
+import sklearn.metrics.pairwise
+
+__author__ = "Aakrosh Ratan"
+__email__  = "ratan@virginia.edu"
+
+# do we want the debug information to be printed?
+debug_flag = False
+
+# threshold for assigning segment to CN 0
+cn0 = 0.5 # this actually represents 2^(-0.5) and below on the log2 scale
+
+def main(filename, numcomponents, printdetails):
+    cnestimates = []
+    with open(filename, "r") as f:
+        for line in f:
+            if line.startswith("ID"): continue
+            #_,_,_,_,_,segmean,_,segmed,_ = line.strip().split("\t")
+            _,_,_,segmed,_ = line.strip().split("\t")
+            cnestimates.append(pow(2,float(segmed)+1))
+
+    # lets remove outliers that might adversely affect the GMM 
+    cnestimates = [x for x in cnestimates if x > cn0 and x < (numcomponents-1)]
+
+    # lets fit a mixture model of m-2 normal distributions
+    gmm = sklearn.mixture.GMM(params='wc', 
+                          init_params='wc', 
+                          n_iter=0, 
+                          covariance_type = "diag",
+                          n_components=numcomponents-2)
+    gmm.fit(np.reshape(range(1,numcomponents-1), (-1,1)))
+    gmm.set_params(n_iter = 10000)
+
+    try:
+        model = gmm.fit(np.reshape(cnestimates, (-1,1)))
+    except RuntimeError as e:
+        print >> stderr, "Runtime Error: %s" % e
+        exit(4)
+    
+    #print model.means_
+    #print model.weights_
+    #print model.covars_
+
+    predi = gmm.predict(np.reshape(cnestimates,(-1,1)))
+    #print predi
+    proba = gmm.predict_proba(np.reshape(cnestimates,(-1,1)))
+    #print proba
+
+    cov_to_cn = {}
+    for x,y,z in zip(cnestimates,predi,proba):
+        cov_to_cn[x] = "%d:%2.2f" % (model.means_[y][0], z[y])
+
+    with open(filename, "r") as f:
+        for line in f:
+            if line.startswith("ID"): continue
+            tokens = line.strip().split("\t")
+            cnestimate = pow(2,float(tokens[3])+1)
+            tokens.append(str(cnestimate))
+            if cnestimate <= cn0:
+                tokens.append("0")
+                tokens.append("NA")
+            elif cnestimate >= (numcomponents-1):
+                tokens.append("%d" % (numcomponents-1))
+                tokens.append("NA")
+            else:
+                cn,pb = cov_to_cn[cnestimate].split(":")
+                tokens.append(cn)
+                tokens.append(pb)
+            print "\t".join(tokens)
+        
+if __name__ == "__main__":
+    try:
+        opts, args = getopt(argv[1:], "hdm:a",["help", "debug", "numcomponents=", "all"])
+    except GetoptError, err:
+        print str(err)
+        print >> stderr, __doc__
+        exit(2) 
+
+    numcomponents = 5
+    printdetails = False
+
+    for o, a in opts:
+        if o in ("-h", "--help"):
+            print >> stderr, __doc__
+            exit()
+        elif o in ("-d", "--debug"):
+            debug_flag = True
+        elif o in ("-m", "--numcomponents"):
+            numcomponents = int(a)
+        elif o in ("-a", "--all"):
+            printdetails = True
+        else:
+            assert False, "unhandled option"
+
+    if len(args) != 1:
+        print >> stderr, __doc__
+        exit(3)
+
+    main(args[0], numcomponents, printdetails)

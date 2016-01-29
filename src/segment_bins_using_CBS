@@ -1,0 +1,65 @@
+#!/usr/bin/env Rscript
+
+## Default when nothing is passed
+args = commandArgs(trailingOnly = TRUE)
+if(length(args) == 0){
+    args <- c("--help")    
+}
+
+## Help section
+if("--help" %in% args) {
+  cat("
+      Segment using CBS
+ 
+      Arguments:
+      --help                - print this text
+      --outseg=someValue    - name of the output file with the segments
+      --mediancov=someValue - use this as the median coverage (corresponding to CN2)
+
+      Example:
+      ./segment_bins_using_CBS bins.corrected.txt
+
+      median coverage is calculated automatically if not supplied\n\n")
+ 
+  q(save="no")
+}
+
+## Parse arguments (we expect the form --arg=value)
+parseArgs <- function(x) strsplit(sub("^--", "", x), "=")
+argsDF <- as.data.frame(do.call("rbind", parseArgs(args)))
+if (ncol(argsDF) == 2) {
+    argsL <- as.list(as.character(argsDF$V2))
+    names(argsL) <- argsDF$V1
+} else {
+    argsL <- list()
+    argsL$outseg = NULL   
+    argsL$mediancov = NULL
+}
+ 
+## Arg1 default
+if(is.null(argsL$outseg)) {
+    argsL$outseg = stdout()
+}
+
+# read the dataset
+data = read.table(pipe(paste("cut -f 1,2,3,4 ", args[length(args)], sep = " ")))
+names(data) = c("chrom","zstart","end","cov")
+
+# convert this to a logratio 
+if(is.null(argsL$mediancov)) {
+    mediancov = quantile(data$cov, probs = 0.5, na.rm = TRUE, names = FALSE)
+} else {
+    mediancov = as.integer(argsL$mediancov)
+}
+write(paste("Used median coverage is",mediancov, sep = " "), stderr())
+data$cov = log2((data$cov+1) / mediancov)
+
+library(DNAcopy)
+
+CNA.object = CNA(cbind(data$cov), data$chrom, data$zstart, data.type = "logratio", sample = "Sample")
+smoothed.CNA.object <- smooth.CNA(CNA.object)
+segment.smoothed.CNA.object <- segment(smoothed.CNA.object, verbose=1)
+sdundo.CNA.object <- segment(smoothed.CNA.object, undo.splits="sdundo", undo.SD=2,verbose=1)
+additionalSummary = segments.summary(sdundo.CNA.object)
+
+write.table(additionalSummary, file = argsL$outseg, row.names=F, col.names=T, quote=F, sep="\t")
