@@ -85,6 +85,7 @@ static hashtable* ReadReference(const char* const refname)
         sp = get_next_sequence(sp);
     } 
 
+    close_fasta_sequence(sp);
     return reference;
 }
 
@@ -119,7 +120,7 @@ static void CreateRefMap(const char* const refName,
 
     chrcoverage* cc;
     int index = 0;
-    int num_mappable = 0, num_total = 0;
+    u64 num_mappable = 0, num_total = 0;
     signed long ret;    
 
     while ((ret = getline(&line, &n, fp)) != -1) {
@@ -128,7 +129,15 @@ static void CreateRefMap(const char* const refName,
             if (strncmp(line, "~~ENCODING", 10) == 0) {
                 encoding_flag = TRUE;  
             } else if (map_flag == TRUE) {
-                cc = (chrcoverage*)must_find_hashtable(reference, line+1, strlen(line+1)-1);
+                // if the name has more than one token, then I only use the
+                // first token
+                int i = 0;
+                while((line[i] != '\n') &&
+                      (line[i] != 0)    &&
+                      (line[i] != '\t') &&
+                      (line[i] != 32)) i++;
+                line[i] = 0;               
+                cc = (chrcoverage*)must_find_hashtable(reference, line+1, strlen(line+1));
                 index = 0;
             }
         } else {
@@ -156,7 +165,7 @@ static void CreateRefMap(const char* const refName,
     ckfree(line);
     fclose(fp);
 
-    fprintf(stderr, "%d (%2.2f%%) mappable bases in the genome.\n", 
+    fprintf(stderr, "%"PRIu64" (%2.2f%%) mappable bases in the genome.\n", 
         num_mappable, num_mappable * 100.0 / num_total);
 
     //bin* iter;
@@ -365,46 +374,50 @@ static void PrintBinInfo(const char* const refName,
                          hashtable* const reference,
                          const int binSize)
 {
-    bin* iter;
-    bin* next;
     int gc;
+
+    sequence* sp = read_fasta_sequence(refName);
     
-    for(int i = 0; i < reference->size; i++){
-        iter = reference->bins[i];
-        while(iter){
-            next = iter->next;
+    while(sp != NULL){
+        int i = 0;
+        while((sp->header[i] != '\n') &&
+              (sp->header[i] != 0)    &&
+              (sp->header[i] != '\t') &&
+              (sp->header[i] != 32)) i++;
+        sp->header[i] = 0;
 
-            int binSum = 0; 
-            int binIndex = 0;
-            u64 start = 0;
+        int binSum = 0; 
+        int binIndex = 0;
+        u64 start = 0;
 
-            chrcoverage* chrcov = (chrcoverage*)iter->val;
+        chrcoverage* chrcov = (chrcoverage*)must_find_hashtable(reference, 
+                               sp->header, strlen(sp->header));
+        for (u64 j = 0; j < chrcov->length; j++) {
+            if (chrcov->map[j] == '1') {
 
-            for (u64 j = 0; j < chrcov->length; j++) {
-                if (chrcov->map[j] == '1') {
-
-                    binSum += chrcov->cov[j];
-                    binIndex += 1;
-                    if (binIndex == binSize) {
-                        gc = CalculateGC(chrcov, start, j+1);
-                        printf("%s\t%"PRIu64"\t%"PRIu64"\t%d\t%d\t%d\n", 
-                            iter->name, start, j+1, binSum, binSize, gc);
-                        binIndex = 0;
-                        binSum = 0;
-                        start = j + 1;
-                    }
+                binSum += chrcov->cov[j];
+                binIndex += 1;
+                if (binIndex == binSize) {
+                    gc = CalculateGC(chrcov, start, j+1);
+                    printf("%s\t%"PRIu64"\t%"PRIu64"\t%d\t%d\t%d\n", 
+                        sp->header, start, j+1, binSum, binSize, gc);
+                    binIndex = 0;
+                    binSum = 0;
+                    start = j + 1;
                 }
             }
-    
-            if (binIndex > 0) {
-                gc = CalculateGC(chrcov, start, chrcov->length);
-                printf("%s\t%"PRIu64"\t%"PRIu64"\t%d\t%d\t%d\n", 
-                    iter->name, start, chrcov->length, binSum, binIndex, gc);
-            }
-
-            iter = next;
         }
-    }   
+
+        if (binIndex > 0) {
+            gc = CalculateGC(chrcov, start, chrcov->length);
+            printf("%s\t%"PRIu64"\t%"PRIu64"\t%d\t%d\t%d\n", 
+                sp->header, start, chrcov->length, binSum, binIndex, gc);
+        }
+
+        sp = get_next_sequence(sp);
+    }
+
+    close_fasta_sequence(sp);
 }
 
 static void count_in_bins(const char* const refName,
