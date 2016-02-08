@@ -21,3 +21,7 @@ and the following R libraries
 - grid
 - gridExtra
 - DNAcopy
+
+It is also dependent on the following submodules
+
+- htslib
