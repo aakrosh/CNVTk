@@ -1,6 +1,6 @@
 CC := gcc
-CFLAGS := -g -I$(PWD)/htslib/htslib
-LDFLAGS := htslib/libhts.a -lz -lm -lpthread
+CFLAGS := -g -I$(PWD)/htslib/htslib -std=gnu99 -O3
+LDLIBS := htslib/libhts.a -lz -lm -lpthread
 
 .PHONY: htslib clean
 
