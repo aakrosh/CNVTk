@@ -336,7 +336,7 @@ static int CalculateAGoodBinSize(const char* const refName,
     if (average_cov >= 100)
         binSize = 100;
     else
-        binSize = 100 * (100 * 1.0 / average_cov);
+        binSize = 100 * (100 * 1.0 / int(average_cov));
 
     return binSize;
 }
