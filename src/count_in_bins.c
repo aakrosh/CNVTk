@@ -304,7 +304,7 @@ static float CalculateAverageCoverage(hashtable* const reference, const int bs)
                 if (chrcov->map[j] == '1') {
                     binSum += chrcov->cov[j];
                     binIndex += 1;
-                    if (binIndex == 100) {
+                    if (binIndex == bs) {
                         // only consider non-zero bins
                         if (binSum > 0) {
                             sum += binSum;
@@ -329,14 +329,28 @@ static int CalculateAGoodBinSize(const char* const refName,
                                  hashtable* const reference)
 {
     int binSize = 100;
+    int tmpBinSize = binSize;
 
-    float average_cov = CalculateAverageCoverage(reference, binSize);
-    fprintf(stderr, "Average coverage with 100 mappable bases: %2.2f\n", average_cov);    
+    float average_cov = 0;
 
-    if (average_cov >= 100)
-        binSize = 100;
-    else
-        binSize = 100 * (100 * 1.0 / (int)average_cov);
+    while (1) {
+        average_cov = CalculateAverageCoverage(reference, binSize);
+        fprintf(stderr, "Trying a binsize of %d bases. Average cov: %2.2f\n", binSize, average_cov); 
+        if (average_cov < 100) {
+            tmpBinSize = (int)(100 * (100 * 1.0 / (int)average_cov));
+            if (tmpBinSize < 2*binSize) {
+                binSize = 2*binSize;
+            } else {
+                binSize = tmpBinSize;
+            }
+            if (binSize > 10000000) {
+                fprintf(stderr, "The binsize would be too high (>10Mbp)\n");
+                return -1;
+            }
+        } else {
+            break;
+        }
+    }
 
     return binSize;
 }
@@ -443,6 +457,7 @@ static void count_in_bins(const char* const refName,
     // bin on average
     if (binSize == 0) 
         binSize = CalculateAGoodBinSize(refName, reference);
+    if (binSize < 0) return;
     fprintf(stderr, "Using a bin size of %d mappable bases.\n", binSize);
 
     // using that bin size, print out the information about the bins
