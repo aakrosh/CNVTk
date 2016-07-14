@@ -1,9 +1,5 @@
 #!/usr/bin/env Rscript
 
-library(ggplot2)
-library(grid)
-library(gridExtra)
-
 ## Default when nothing is passed
 args = commandArgs(trailingOnly = TRUE)
 if(length(args) == 1){
@@ -29,7 +25,9 @@ if("--help" %in% args) {
 parseArgs <- function(x) strsplit(sub("^--", "", x), "=")
 argsDF <- as.data.frame(do.call("rbind", parseArgs(args)))
 argsL <- as.list(as.character(argsDF$V2))
-names(argsL) <- argsDF$V1
+if (length(argsL) != 0) {
+    names(argsL) <- argsDF$V1
+}
  
 ## Arg1 default
 if(is.null(argsL$merge)) {
@@ -37,11 +35,15 @@ if(is.null(argsL$merge)) {
 }
 argsL$merge = as.integer(argsL$merge)
 
+library(ggplot2)
+library(grid)
+library(gridExtra)
+
 smoothed = args[length(args)-1]
 output   = args[length(args)]
 
 # read the columns from the coverage
-data = read.table(pipe(paste("cut -f 1,4,5", smoothed, sep = "\t")))
+data = read.table(pipe(paste("cut -f 1,4,6", smoothed, sep = "\t")))
 names(data) = c("chrom", "coverage", "gc")
 
 slice<-function(x,n) {
