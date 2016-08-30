@@ -2,7 +2,7 @@
 
 """
     usage:
-      genotype_segments [options] segments.txt
+      genotype_segments [options] normalized.counts segments.txt
 
     where the options are:
         -h,--help : print usage and quit
@@ -27,14 +27,51 @@ debug_flag = False
 # threshold for assigning segment to CN 0
 cn0 = 0.5 # this actually represents 2^(-0.5) and below on the log2 scale
 
-def main(filename, numcomponents, printdetails):
-    cnestimates = []
+def main(cntname, filename, numcomponents, printdetails):
+    # read all the bin start and end points from the normalized counts
+    cnts = {}
+    with open(cntname, "r") as f:
+        for line in f:
+            chrom,start,end,_,_,_ = line.strip().split()
+            start = int(start)
+            end   = int(end)
+            if chrom not in cnts:
+                cnts[chrom] = []
+            cnts[chrom].append((start,end))
+    print >> stderr, "Read the counts for the genome."
+
+    # I provide the start of the bin as the input to the segmenter. So lets
+    # update the values here, so I cover the whole genome.
+    header = True
+    chroms = set()
+    segments = []
     with open(filename, "r") as f:
         for line in f:
-            if line.startswith("ID"): continue
-            #_,_,_,_,_,segmean,_,segmed,_ = line.strip().split("\t")
-            _,_,_,segmed,_ = line.strip().split("\t")
-            cnestimates.append(pow(2,float(segmed)+1))
+            if line.startswith("ID"): 
+                header = False
+                continue
+            if header == True:
+                continue        
+
+            _,chrom,start,end,num,mean,sd,median,mad = line.strip().split()
+            if chrom not in chroms:
+                chromindx = 0
+                chroms.add(chrom)              
+
+            intervals = cnts[chrom][chromindx:chromindx+int(num)]
+            mstart = intervals[0][0]
+            mend   = intervals[-1][1]
+            chromindx += int(num)
+
+            segments.append((chrom,mstart,mend,mean,sd))
+    print >> stderr, "Corrected the boundaries of the segments."
+
+    # lets add in the copy-number estimates to a list. We will investigate the
+    # distribution of the copy numbers
+    cnestimates = []
+    for segment in segments:
+        _,_,_,segmed,_ = segment
+        cnestimates.append(pow(2,float(segmed)+1))
 
     # lets remove outliers that might adversely affect the GMM 
     cnestimates = [x for x in cnestimates if x > cn0 and x < (numcomponents-1)]
@@ -70,8 +107,9 @@ def main(filename, numcomponents, printdetails):
     with open(filename, "r") as f:
         for line in f:
             if line.startswith("ID"): continue
+
             tokens = line.strip().split("\t")
-            cnestimate = pow(2,float(tokens[3])+1)
+            cnestimate = pow(2,float(tokens[5])+1)
             tokens.append(str(cnestimate))
             if cnestimate <= cn0:
                 tokens.append("0")
@@ -109,8 +147,8 @@ if __name__ == "__main__":
         else:
             assert False, "unhandled option"
 
-    if len(args) != 1:
+    if len(args) != 2:
         print >> stderr, __doc__
         exit(3)
 
-    main(args[0], numcomponents, printdetails)
+    main(args[0], args[1], numcomponents, printdetails)
